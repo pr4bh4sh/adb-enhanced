@@ -16,6 +16,7 @@ import threading
 import time
 import os
 import random
+import collections
 # This is required only for Python 2
 # pylint: disable=import-error
 from urllib.parse import urlparse
@@ -48,6 +49,8 @@ except ImportError:
 
 _KEYCODE_BACK = 4
 _MIN_API_FOR_RUNTIME_PERMISSIONS = 23
+
+Device = collections.namedtuple('Device', 'device_serial, manufacturer, model, display_name, release, sdk, cpu')
 
 
 def _ensure_package_exists(package_name):
@@ -332,20 +335,33 @@ def _is_app_running(app_name):
     return result.find(app_name) != -1
 
 
-def handle_list_devices():
-    cmd = 'devices -l'
-    return_code, stdout, stderr = execute_adb_command2(cmd)
-    if return_code != 0:
-        print_error_and_exit('Failed to execute command %s, error: %s ' % (cmd, stderr))
+def get_connected_device_info_list():
+    device_ids = get_device_list()
+    device_infos = []
+    for device_info in device_ids:
+        if len(device_info) == 0:
+            continue
+        device_serial = device_info.split()[0]
+        if 'unauthorized' in device_info:
+            device_info = ' '.join(device_info.split()[1:])
+            print_error(
+                ('Unlock Device "%s" and give USB debugging access to ' +
+                 'this PC/Laptop by unlocking and reconnecting ' +
+                 'the device. More info about this device: "%s"\n') % (
+                    device_serial, device_info))
+        else:
+            _d = dict(_get_device_info(device_serial)._as_dict)
+            device_infos.append(_d)
 
-    # Skip the first line, it says "List of devices attached"
-    device_infos = stdout.split('\n')[1:]
+        return device_infos
+
+
+def handle_list_devices():
+    device_infos = get_device_list()
 
     if len(device_infos) == 0 or (
             len(device_infos) == 1 and len(device_infos[0]) == 0):
         print_error_and_exit('No attached Android device found')
-    elif len(device_infos) == 1:
-        _print_device_info()
     else:
         for device_info in device_infos:
             if len(device_info) == 0:
@@ -362,7 +378,24 @@ def handle_list_devices():
                 _print_device_info(device_serial)
 
 
+def get_device_list():
+    cmd = 'devices -l'
+    return_code, stdout, stderr = execute_adb_command2(cmd)
+    if return_code != 0:
+        print_error_and_exit('Failed to execute command %s, error: %s ' % (cmd, stderr))
+    # Skip the first line, it says "List of devices attached"
+    device_ids = stdout.split('\n')[1:]
+    return device_ids
+
+
 def _print_device_info(device_serial=None):
+    device = _get_device_info(device_serial)
+    print_message(
+        'Serial ID: %s\nManufacturer: %s\nModel: %s (%s)\nRelease: %s\nSDK version: %s\nCPU: %s\n' %
+        (device.device_serial, device.manufacturer, device.model, device.display_name, device.release, device.sdk, device.cpu))
+
+
+def _get_device_info(device_serial=None):
     manufacturer = get_adb_shell_property('ro.product.manufacturer', device_serial=device_serial)
     model = get_adb_shell_property('ro.product.model', device_serial=device_serial)
     # This worked on 4.4.3 API 19 Moto E
@@ -384,17 +417,19 @@ def _print_device_info(device_serial=None):
 
     release = get_adb_shell_property('ro.build.version.release', device_serial=device_serial)
     sdk = get_adb_shell_property('ro.build.version.sdk', device_serial=device_serial)
-    print_message(
-        'Serial ID: %s\nManufacturer: %s\nModel: %s (%s)\nRelease: %s\nSDK version: %s\nCPU: %s\n' %
-        (device_serial, manufacturer, model, display_name, release, sdk, abi))
+    return Device(device_serial=device_serial, manufacturer=manufacturer, model=model, display_name=display_name, release=release, sdk=sdk, cpu=abi)
 
 
 def print_top_activity():
-    app_name, activity_name = _get_top_activity_data()
+    app_name, activity_name = get_top_activity()
     if app_name:
         print_message('Application name: %s' % app_name)
     if activity_name:
         print_message('Activity name: %s' % activity_name)
+
+
+def get_top_activity():
+    return _get_top_activity_data()
 
 
 def _get_top_activity_data():
